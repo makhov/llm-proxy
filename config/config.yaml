@@ -1,0 +1,83 @@
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  log_level: "info"
+
+llm:
+  default_model: "gpt-4o"
+  allowed_models:
+    - "gpt-4o"
+    - "gpt-4o-mini"
+    - "claude-3-5-sonnet-20241022"
+    - "claude-3-haiku-20240307"
+    - "azure/gpt-4o"
+  fallback_models: []
+  # fallback_models:
+  #   - "claude-3-5-sonnet-20241022"
+  #   - "gpt-4o-mini"
+
+  model_aliases:
+    gpt-4: "gpt-4o"
+    claude-3-sonnet: "claude-3-5-sonnet-20241022"
+  per_model_max_tokens:
+    gpt-4o: 8192
+    gpt-4o-mini: 4096
+    claude-3-5-sonnet-20241022: 8192
+    claude-3-haiku-20240307: 4096
+
+rag:
+  enabled: true
+  top_k: 5
+  score_threshold: 0.4
+  embedding_model: "all-MiniLM-L6-v2"
+  context_prefix: "Relevant internal documentation:\n\n"
+  context_separator: "\n\n---\n\n"
+
+pii:
+  enabled: true
+  score_threshold: 0.7
+  entities:
+    - PERSON
+    - EMAIL_ADDRESS
+    - PHONE_NUMBER
+    - CREDIT_CARD
+    - US_SSN
+    - IP_ADDRESS
+    - LOCATION
+    - NRP
+    - MEDICAL_LICENSE
+
+rate_limiting:
+  enabled: true
+  backend: "memory"
+  redis_url: ""
+  defaults:
+    requests_per_minute: 60
+    tokens_per_minute: 100000
+    tokens_per_day: 1000000
+
+content_policy:
+  enabled: true
+  max_input_tokens: 32000
+  blocked_patterns:
+    - "ignore previous instructions"
+    - "ignore all previous"
+    - "you are now dAN"
+    - "jailbreak"
+
+cache:
+  enabled: false
+  type: "local"   # "local" (in-process) | "redis" (shared across workers)
+  ttl: 3600       # seconds; exact-match only — same messages → cached response
+  redis_host: "localhost"
+  redis_port: 6379
+
+analytics:
+  enabled: false
+  provider: "langfuse"  # only "langfuse" supported; other LiteLLM callbacks can be added
+
+logging:
+  level: "info"
+  format: "json"
+  access_log: true

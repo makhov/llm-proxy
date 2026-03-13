@@ -1,0 +1,83 @@
+services:
+  proxy:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PROXY_MASTER_KEY=${PROXY_MASTER_KEY:-change-me-in-production}
+      - DATABASE_URL=postgresql+asyncpg://proxy:proxy@postgres:5432/llm_proxy
+      # Langfuse analytics — remove or leave blank to disable
+#      - ANALYTICS__ENABLED=${ANALYTICS__ENABLED:-false}
+#      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+#      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+#      - LANGFUSE_HOST=${LANGFUSE_HOST:-http://langfuse:3000}
+    volumes:
+      - ../chroma_data:/app/chroma_data
+      - ../knowledge_base:/app/knowledge_base
+      - ../config:/app/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+#      langfuse:
+#        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: proxy
+      POSTGRES_PASSWORD: proxy
+      POSTGRES_DB: llm_proxy
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proxy -d llm_proxy"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Self-hosted Langfuse — remove this block to use Langfuse Cloud instead
+  # After first boot, create a project at http://localhost:3000 and copy the keys to .env
+#  langfuse:
+#    image: langfuse/langfuse:latest
+#    ports:
+#      - "43000:3000"
+#    environment:
+#      - DATABASE_URL=postgresql://proxy:proxy@postgres:5432/langfuse
+#      - NEXTAUTH_SECRET=${LANGFUSE_NEXTAUTH_SECRET:-changeme-nextauth-secret}
+#      - SALT=${LANGFUSE_SALT:-changeme-salt}
+#      - NEXTAUTH_URL=http://localhost:3000
+#      - TELEMETRY_ENABLED=false
+#    depends_on:
+#      postgres:
+#        condition: service_healthy
+#    healthcheck:
+#      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 10
+#      start_period: 30s
+#    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+# To enable Langfuse analytics:
+# 1. Set ANALYTICS__ENABLED=true in .env
+# 2. Start: docker compose up langfuse postgres -d
+# 3. Open http://localhost:3000, create an account + project
+# 4. Copy Public Key + Secret Key into .env as LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY
+# 5. docker compose up -d

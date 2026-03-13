@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Dev/test artefacts
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+
+# Runtime data (mounted as volumes in production)
+chroma_data/
+knowledge_base/
+proxy.db
+
+# Secrets
+.env
+
+# Git
+.git/
+.gitignore
+
+# Docs
+README.md
+
+# Docker files themselves (avoid infinite context loop)
+docker/
+Dockerfile

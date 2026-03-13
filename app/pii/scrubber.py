@@ -1,0 +1,128 @@
+"""PII scrubbing using Microsoft Presidio + custom regex recognizers."""
+from __future__ import annotations
+
+import re
+import uuid
+
+from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
+from presidio_anonymizer import AnonymizerEngine
+from presidio_anonymizer.entities import OperatorConfig
+
+from app.config import Settings
+from app.pii.regex_patterns import CUSTOM_RECOGNIZERS
+
+# Placeholder format: <<PII_<ENTITY_TYPE>_<SHORT_UUID>>>
+_PLACEHOLDER_PREFIX = "<<PII_"
+_PLACEHOLDER_SUFFIX = ">>"
+_PLACEHOLDER_RE = re.compile(r"<<PII_[A-Z_]+_[a-f0-9]{8}>>")
+
+
+def _make_placeholder(entity_type: str) -> str:
+    short_id = uuid.uuid4().hex[:8]
+    return f"{_PLACEHOLDER_PREFIX}{entity_type}_{short_id}{_PLACEHOLDER_SUFFIX}"
+
+
+class PIIScrubber:
+    def __init__(self, settings: Settings):
+        self._enabled = settings.pii_enabled
+        self._threshold = settings.pii_score_threshold
+        self._entities = settings.pii_entities
+
+        registry = RecognizerRegistry()
+        registry.load_predefined_recognizers()
+        for recognizer in CUSTOM_RECOGNIZERS:
+            registry.add_recognizer(recognizer)
+
+        self._analyzer = AnalyzerEngine(registry=registry)
+        self._anonymizer = AnonymizerEngine()
+
+    def scrub_messages(
+        self,
+        messages: list[dict],
+    ) -> tuple[list[dict], dict[str, str], int]:
+        """
+        Returns (scrubbed_messages, restoration_map, total_entities_count).
+
+        restoration_map maps placeholder → original value.
+        Placeholders are consistent per-request: same original value → same placeholder.
+        """
+        if not self._enabled:
+            return messages, {}, 0
+
+        restoration_map: dict[str, str] = {}
+        # reverse map for dedup: original → placeholder
+        original_to_placeholder: dict[str, str] = {}
+        scrubbed_messages = []
+        total = 0
+
+        for msg in messages:
+            if msg.get("role") == "system":
+                # Optionally skip system messages (they're usually from the app, not users)
+                scrubbed_messages.append(msg)
+                continue
+
+            content = msg.get("content")
+            if not isinstance(content, str) or not content:
+                scrubbed_messages.append(msg)
+                continue
+
+            scrubbed_content, n = self._scrub_text(
+                content, restoration_map, original_to_placeholder
+            )
+            total += n
+            scrubbed_messages.append({**msg, "content": scrubbed_content})
+
+        return scrubbed_messages, restoration_map, total
+
+    def _scrub_text(
+        self,
+        text: str,
+        restoration_map: dict[str, str],
+        original_to_placeholder: dict[str, str],
+    ) -> tuple[str, int]:
+        results = self._analyzer.analyze(
+            text=text,
+            entities=self._entities,
+            language="en",
+            score_threshold=self._threshold,
+        )
+
+        if not results:
+            return text, 0
+
+        # Build a custom operator that assigns our deterministic placeholders
+        operators: dict[str, OperatorConfig] = {}
+        for result in results:
+            original_value = text[result.start:result.end]
+            if original_value in original_to_placeholder:
+                placeholder = original_to_placeholder[original_value]
+            else:
+                placeholder = _make_placeholder(result.entity_type)
+                original_to_placeholder[original_value] = placeholder
+                restoration_map[placeholder] = original_value
+
+            operators[result.entity_type] = OperatorConfig(
+                "replace", {"new_value": placeholder}
+            )
+
+        anonymized = self._anonymizer.anonymize(
+            text=text,
+            analyzer_results=results,
+            operators=operators,
+        )
+        return anonymized.text, len(results)
+
+
+_scrubber: PIIScrubber | None = None
+
+
+def init_scrubber(settings: Settings) -> PIIScrubber:
+    global _scrubber
+    _scrubber = PIIScrubber(settings)
+    return _scrubber
+
+
+def get_scrubber() -> PIIScrubber:
+    if _scrubber is None:
+        raise RuntimeError("PIIScrubber not initialized")
+    return _scrubber
