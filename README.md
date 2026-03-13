@@ -5,6 +5,8 @@ An in-house AI gateway for teams that need controlled, observable access to LLMs
 ## Features
 
 - **Multi-provider** — OpenAI, Anthropic, Azure OpenAI, and [any LiteLLM-supported provider](https://docs.litellm.ai/docs/providers)
+- **Anthropic Messages API** — native `/v1/messages` endpoint so Claude Code and the Anthropic SDK connect without any adapter
+- **Google SSO portal** — employees log in with Google at `/auth/login` and receive an API key on a self-serve HTML page; no admin involvement required
 - **PII scrubbing** — strips personal data from requests before they leave your network using Microsoft Presidio (NLP-based) and custom regex patterns; restores placeholders in responses
 - **RAG / internal knowledge base** — enriches answers with context from your internal docs (Markdown, text) via ChromaDB vector search
 - **Usage tracking** — every request is logged with model, tokens, cost, latency, and user identity to a database
@@ -97,6 +99,31 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Summarise last quarter's results"}],
 )
 print(response.choices[0].message.content)
+```
+
+Using the **Anthropic Python SDK** or **Claude Code** via the native Messages API:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    api_key="llmp-...",
+    base_url="http://localhost:8000",
+)
+
+message = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "What is our parental leave policy?"}],
+)
+print(message.content[0].text)
+```
+
+```bash
+# Claude Code — point it at the proxy instead of Anthropic directly
+export ANTHROPIC_BASE_URL=http://localhost:8000
+export ANTHROPIC_AUTH_TOKEN=llmp-...
+claude
 ```
 
 ---
@@ -274,6 +301,69 @@ content_policy:
 
 Requests matching any pattern (case-insensitive) are rejected with HTTP 400 before reaching the LLM.
 
+### Anthropic Messages API (`/v1/messages`)
+
+The proxy exposes a native Anthropic Messages API endpoint alongside the OpenAI-compatible one. Any client that uses the Anthropic SDK or speaks the Anthropic wire format will work without translation.
+
+```bash
+curl http://localhost:8000/v1/messages \
+  -H "Authorization: Bearer llmp-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Summarise the onboarding docs"}]
+  }'
+```
+
+Supported features: `system` prompt, multi-turn messages, tool use, streaming (Anthropic SSE event format), `stop_sequences`. The full request pipeline (PII scrubbing, RAG, rate limiting, caching, usage tracking, metrics) runs identically on both endpoints.
+
+**Streaming** emits proper Anthropic SSE events:
+
+```
+event: message_start
+event: content_block_start
+event: ping
+event: content_block_delta   ← repeated for each text chunk
+event: content_block_stop
+event: message_delta
+event: message_stop
+```
+
+### Google SSO portal
+
+Employees can self-serve an API key by logging in with their Google account — no admin intervention required.
+
+```
+GET /auth/login      → redirect to Google consent screen
+GET /auth/callback   → exchange code, create user, issue key, show HTML page
+```
+
+The callback page displays the generated `llmp-...` key once with a copy button and the two shell commands needed to configure Claude Code.
+
+**Setup:**
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) → APIs & Services → Credentials → Create OAuth 2.0 Client ID (Web application).
+2. Add `https://your-proxy.internal/auth/callback` to the list of authorised redirect URIs.
+3. Set the credentials in `.env` or `config.yaml`:
+
+```env
+GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-...
+AUTH_BASE_URL=https://your-proxy.internal
+```
+
+```yaml
+# config/config.yaml
+google_client_id: "xxxx.apps.googleusercontent.com"
+google_client_secret: "GOCSPX-..."
+auth_base_url: "https://your-proxy.internal"
+```
+
+If `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` are not set both routes return `501 Not Implemented`. The portal can be disabled entirely by simply not providing those credentials.
+
+Each login issues a **fresh** API key (`name: sso`). Old keys remain valid until revoked via the admin API, so accidental re-logins do not break running sessions.
+
 ### Langfuse analytics
 
 ```yaml
@@ -388,12 +478,14 @@ app/
 ├── config.py                # Settings (YAML + env vars)
 ├── api/
 │   ├── v1/
-│   │   ├── chat.py          # POST /v1/chat/completions
+│   │   ├── chat.py          # POST /v1/chat/completions  (OpenAI format)
+│   │   ├── messages.py      # POST /v1/messages          (Anthropic format)
 │   │   ├── models.py        # GET /v1/models
 │   │   └── health.py        # GET /healthz  /readyz
-│   └── internal/
-│       ├── admin.py         # User/team/key management, usage reports
-│       └── kb.py            # Knowledge base ingestion endpoints
+│   ├── internal/
+│   │   ├── admin.py         # User/team/key management, usage reports
+│   │   └── kb.py            # Knowledge base ingestion endpoints
+│   └── auth.py              # GET /auth/login  /auth/callback  (Google SSO)
 ├── core/
 │   ├── auth.py              # API key → user/team resolution
 │   ├── rate_limiter.py      # Token-bucket rate limiting
@@ -410,6 +502,9 @@ app/
 │   └── ingestion.py         # Document chunking and upsert pipeline
 ├── llm/
 │   └── client.py            # LiteLLM wrapper (token count, cost, fallbacks, cache)
+├── schemas/
+│   ├── openai.py            # Pydantic models — OpenAI chat format
+│   └── anthropic.py         # Pydantic models — Anthropic Messages format + converters
 ├── analytics/
 │   └── langfuse.py          # Optional Langfuse tracing via LiteLLM callbacks
 ├── metrics/

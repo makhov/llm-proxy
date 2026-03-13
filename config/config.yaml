@@ -81,3 +81,10 @@ logging:
   level: "info"
   format: "json"
   access_log: true
+
+# Google OAuth portal (optional)
+# Enables GET /auth/login → Google consent → GET /auth/callback → issues API key
+# Set via env vars or uncomment here:
+# google_client_id: ""
+# google_client_secret: ""
+# auth_base_url: "https://your-proxy.internal"

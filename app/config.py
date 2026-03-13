@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     langfuse_host: str = ""  # empty = Langfuse cloud; set to http://langfuse:3000 for self-hosted
 
+    # Google OAuth portal (optional — enables GET /auth/login)
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    auth_base_url: str = "http://localhost:8000"
+
     @property
     def host(self) -> str:
         return self.server__host
@@ -244,6 +249,10 @@ class Settings(BaseSettings):
     @property
     def analytics_provider(self) -> str:
         return self.analytics__provider
+
+    @property
+    def oauth_enabled(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret)
 
 
 @lru_cache
